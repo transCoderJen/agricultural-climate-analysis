@@ -1,0 +1,131 @@
+
+# ==========================================
+# Agricultural Climate Analysis
+# Python / Jupyter / Data Science
+# ==========================================
+
+# ------------------------------------------
+# API Keys and Secrets
+# ------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# ------------------------------------------
+# Python
+# ------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# ------------------------------------------
+# Virtual Environments
+# ------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ------------------------------------------
+# Jupyter Notebooks
+# ------------------------------------------
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+.profile_default/
+.ipython/
+
+# ------------------------------------------
+# Raw Agricultural and Climate Data
+# ------------------------------------------
+data/raw/
+data/processed/
+data/cache/
+
+# Original USDA Quick Stats bulk downloads
+qs_crops data_*.txt
+qs_crops*.zip
+
+# ------------------------------------------
+# Generated Data Files
+# ------------------------------------------
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.sqlite
+*.db
+
+# Allow small example datasets to be tracked
+!data/examples/
+!data/examples/**
+!*.example.csv
+!*.sample.csv
+
+# ------------------------------------------
+# Generated Figures and Reports
+# ------------------------------------------
+outputs/
+reports/generated/
+figures/generated/
+
+# ------------------------------------------
+# Testing and Coverage
+# ------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+
+# ------------------------------------------
+# IDE and Editor Files
+# ------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ------------------------------------------
+# Operating System Files
+# ------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ------------------------------------------
+# Logs and Temporary Files
+# ------------------------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*.backup
+*.cache
+temp/
+tmp/
