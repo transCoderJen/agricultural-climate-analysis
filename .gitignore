@@ -129,3 +129,7 @@ $RECYCLE.BIN/
 *.cache
 temp/
 tmp/
+
+# Track data dictionaries as project documentation
+!data/dictionaries/
+!data/dictionaries/*.csv

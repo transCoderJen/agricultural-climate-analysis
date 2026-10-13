@@ -1,0 +1,40 @@
+Column,Description,Data Type,Missing Values
+ZIP_5,Five-digit ZIP code,str,0
+WATERSHED_CODE,Watershed geographic identifier,str,0
+FREQ_DESC,"Reporting frequency, such as annual or weekly",str,0
+COUNTRY_NAME,Country name,str,0
+VALUE,Reported agricultural statistic,str,0
+COUNTY_ANSI,County ANSI geographic identifier,string,0
+WEEK_ENDING,Ending date for weekly observations,str,0
+LOAD_TIME,Date and time the record was loaded into USDA Quick Stats,str,0
+UTIL_PRACTICE_DESC,How the agricultural commodity is used,str,0
+STATE_ANSI,State ANSI geographic identifier,string,0
+STATISTICCAT_DESC,"Type of statistic, such as yield or production",str,0
+AGG_LEVEL_DESC,Geographic aggregation level,str,0
+BEGIN_CODE,Beginning period code,str,0
+REFERENCE_PERIOD_DESC,Reference period for the observation,str,0
+STATE_NAME,Full state name,str,0
+COMMODITY_DESC,Crop or agricultural commodity,str,0
+DOMAINCAT_DESC,Specific category within the domain,str,0
+UNIT_DESC,Measurement unit associated with the value,str,0
+CV_%,Coefficient of variation expressed as a percentage,str,0
+GROUP_DESC,Agricultural commodity group,str,0
+PRODN_PRACTICE_DESC,"Production practice, such as irrigated or organic",str,0
+SECTOR_DESC,Agricultural sector,str,0
+LOCATION_DESC,Full geographic location description,str,0
+CONGR_DISTRICT_CODE,Congressional district code,str,0
+REGION_DESC,Description of a multi-state region,str,0
+END_CODE,Ending period code,str,0
+SOURCE_DESC,Source of the data (Census or Survey),str,0
+COUNTRY_CODE,Country geographic identifier,str,0
+SHORT_DESC,Detailed description of the agricultural statistic,str,0
+COUNTY_NAME,County name,str,0
+STATE_ALPHA,Two-letter state abbreviation,str,0
+COUNTY_CODE,County geographic code,str,0
+STATE_FIPS_CODE,State FIPS geographic identifier,str,0
+ASD_DESC,Agricultural Statistics District description,str,0
+YEAR,Year associated with the observation,int64,0
+DOMAIN_DESC,Population or category represented by the observation,str,0
+WATERSHED_DESC,Watershed description,str,0
+CLASS_DESC,Classification or variety of the commodity,str,0
+ASD_CODE,Agricultural Statistics District code,str,0
