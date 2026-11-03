@@ -1,0 +1,3 @@
+Variable,Description,Unit,Source
+T2M,Daily average air temperature at 2 meters,°C,NASA POWER
+PRECTOTCORR,Corrected daily precipitation,mm/day,NASA POWER
