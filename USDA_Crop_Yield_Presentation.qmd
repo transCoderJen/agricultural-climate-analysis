@@ -38,11 +38,14 @@ import plotly
 ROOT = Path.cwd()
 csv_path = ROOT / "data" / "processed" / "USDA_Crop_Yields_Cleaned.csv"
 geo_path = ROOT / "data" / "geographic" / "counties_5digit.geojson"
+precip_path = ROOT / "data" / "processed" / "NASA_County_Precipitation_Annual_2015_2025.csv"
 
 if not csv_path.exists():
     raise FileNotFoundError(f"Required cleaned USDA data was not found: {csv_path}")
 if not geo_path.exists():
     raise FileNotFoundError(f"Required county boundary GeoJSON was not found: {geo_path}")
+if not precip_path.exists():
+    raise FileNotFoundError(f"Required precipitation data was not found: {precip_path}")
 
 raw = pd.read_csv(csv_path)
 states = ["IOWA", "ILLINOIS"]
@@ -69,6 +72,14 @@ data = data[
     & ~data["COUNTY_NAME"].astype(str).str.contains("OTHER|COMBINED", case=False, na=False)
 ].copy()
 data["FIPS"] = data["STATE_ANSI"] + data["COUNTY_ANSI"]
+precip = pd.read_csv(precip_path)
+precip["FIPS"] = precip["COUNTY_FIPS"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(5)
+precip["YEAR"] = pd.to_numeric(precip["YEAR"], errors="coerce")
+precip["ANNUAL_PRECIPITATION_MM"] = pd.to_numeric(precip["ANNUAL_PRECIPITATION_MM"], errors="coerce")
+precip = precip[["FIPS", "YEAR", "ANNUAL_PRECIPITATION_MM"]].dropna()
+if precip.duplicated(["FIPS", "YEAR"]).any():
+    raise ValueError("Duplicate county-year precipitation records detected.")
+data = data.merge(precip, on=["FIPS", "YEAR"], how="left", validate="many_to_one")
 if data.empty:
     raise ValueError("No Iowa/Illinois corn/soybean yield observations are available for 2015–2025.")
 if data.duplicated(["STATE_NAME", "COUNTY_ANSI", "COMMODITY_DESC", "YEAR"]).any():
@@ -84,8 +95,9 @@ for feature in geo["features"]:
     props["GEOID"] = str(feature.get("id", props.get("GEOID", ""))).zfill(5)
     props["NAME"] = props.get("NAME", "County")
 
-records = data[["STATE_NAME", "COUNTY_NAME", "COUNTY_ANSI", "FIPS", "YEAR", "COMMODITY_DESC", "YIELD"]].copy()
+records = data[["STATE_NAME", "COUNTY_NAME", "COUNTY_ANSI", "FIPS", "YEAR", "COMMODITY_DESC", "YIELD", "ANNUAL_PRECIPITATION_MM"]].copy()
 records["YIELD"] = records["YIELD"].round(3)
+records["ANNUAL_PRECIPITATION_MM"] = records["ANNUAL_PRECIPITATION_MM"].round(2)
 payload = {
     "states": states,
     "crops": crops,
@@ -96,6 +108,7 @@ payload = {
         crop: [float(data.loc[data["COMMODITY_DESC"] == crop, "YIELD"].min()), float(data.loc[data["COMMODITY_DESC"] == crop, "YIELD"].max())]
         for crop in crops
     },
+    "rainfall_range": [float(precip["ANNUAL_PRECIPITATION_MM"].min()), float(precip["ANNUAL_PRECIPITATION_MM"].max())],
 }
 
 payload_json = json.dumps(payload, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
@@ -112,6 +125,10 @@ page = r'''<style>
 .explorer-chart { height: 610px; }
 .yield-note { font-size:.72rem; color:#526879; margin:.15rem 0; }
 .error-box { color:#8a1c1c; background:#fff1f1; border:1px solid #e1a4a4; padding:1rem; border-radius:.4rem; }
+.reveal .slides section.present,
+.reveal .slides section.present .yield-controls,
+.reveal .slides section.present .yield-controls *,
+.reveal .slides section.present .yield-chart { pointer-events: auto !important; }
 @media (max-width: 900px) { .yield-chart { height: 560px; } .explorer-chart { height: 520px; } }
 </style>
 <div class="yield-shell" id="yield-presentation"></div>
@@ -136,8 +153,9 @@ page = r'''<style>
       <div class="yield-controls">
         <label>Crop <select id="map-crop">${P.crops.map(c => `<option value="${c}">${cropLabel(c)}</option>`).join("")}</select></label>
         <label>Year <select id="map-year">${P.years.map(y => `<option>${y}</option>`).join("")}</select></label>
+        <label>Measure <select id="map-measure"><option value="YIELD">Crop yield</option><option value="ANNUAL_PRECIPITATION_MM">Annual rainfall</option></select></label>
       </div>
-      <div class="yield-note">Color scales are fixed within each crop across years. Gray counties have no reported yield.</div>
+      <div class="yield-note">Choose crop yield or annual rainfall. Gray counties have no data for the selected measure.</div>
       <div id="yield-map" class="yield-chart"></div>
     </section>
     <section>
@@ -153,21 +171,24 @@ page = r'''<style>
     </section>`;
 
   const mapEl = document.getElementById("yield-map");
-  function mapTrace(crop, year) {
+  function mapTrace(crop, year, measure) {
     const vals = Object.fromEntries(byKey("IOWA", crop, year).concat(byKey("ILLINOIS", crop, year)).map(r => [r.FIPS, r]));
-    const observed = geoids.filter(id => vals[id]);
-    const missing = geoids.filter(id => !vals[id]);
+    const observed = geoids.filter(id => vals[id] && vals[id][measure] != null);
+    const missing = geoids.filter(id => !vals[id] || vals[id][measure] == null);
     const observedRows = observed.map(id => vals[id]);
+    const measureLabel = measure === "YIELD" ? "Yield (BU/ACRE)" : "Annual rainfall (MM)";
+    const isRainfall = measure === "ANNUAL_PRECIPITATION_MM";
     return [
-      { type:"choropleth", geojson:P.geojson, locations:observed, z:observedRows.map(r => r.YIELD), featureidkey:"properties.GEOID", zmin:P.ranges[crop][0], zmax:P.ranges[crop][1], colorscale:"YlGn", marker:{line:{color:"white",width:.45}}, customdata:observedRows.map(r => [r.STATE_NAME, r.COUNTY_NAME, r.YEAR, cropLabel(r.COMMODITY_DESC), r.YIELD]), hovertemplate:"<b>%{customdata[1]} County</b><br>State: %{customdata[0]}<br>Year: %{customdata[2]}<br>Crop: %{customdata[3]}<br>Yield: %{customdata[4]:.1f} BU/ACRE<extra></extra>", colorbar:{title:"BU/ACRE"}, showscale:true },
-      { type:"choropleth", geojson:P.geojson, locations:missing, z:missing.map(() => 0), featureidkey:"properties.GEOID", colorscale:[[0,"#d9dee3"],[1,"#d9dee3"]], showscale:false, marker:{line:{color:"white",width:.45}}, customdata:missing.map(id => { const f=countyFeatures.find(x=>String(x.properties.GEOID)===id); return [f.properties.NAME, id.slice(0,2)==="19"?"IOWA":"ILLINOIS", year, cropLabel(crop)]; }), hovertemplate:"<b>%{customdata[0]} County</b><br>State: %{customdata[1]}<br>Year: %{customdata[2]}<br>Crop: %{customdata[3]}<br>Yield: No data<extra></extra>" }
+      { type:"choropleth", geojson:P.geojson, locations:observed, z:observedRows.map(r => r[measure]), featureidkey:"properties.GEOID", zmin:isRainfall ? P.rainfall_range[0] : P.ranges[crop][0], zmax:isRainfall ? P.rainfall_range[1] : P.ranges[crop][1], colorscale:isRainfall ? "Blues" : "YlGn", marker:{line:{color:"white",width:.45}}, customdata:observedRows.map(r => [r.STATE_NAME, r.COUNTY_NAME, r.YEAR, cropLabel(r.COMMODITY_DESC), r.YIELD, r.ANNUAL_PRECIPITATION_MM]), hoverinfo:"all", hovertemplate:"<b>%{customdata[1]} County</b><br>State: %{customdata[0]}<br>Year: %{customdata[2]}<br>Crop: %{customdata[3]}<br>Yield: %{customdata[4]:.1f} BU/ACRE<br>Annual rainfall: %{customdata[5]:.1f} MM<extra></extra>", colorbar:{title:measureLabel}, showscale:true },
+      { type:"choropleth", geojson:P.geojson, locations:missing, z:missing.map(() => 0), featureidkey:"properties.GEOID", colorscale:[[0,"#d9dee3"],[1,"#d9dee3"]], showscale:false, marker:{line:{color:"white",width:.45}}, customdata:missing.map(id => { const f=countyFeatures.find(x => String(x.properties.GEOID)===id); return [f.properties.NAME, id.slice(0,2)==="19"?"IOWA":"ILLINOIS", year, cropLabel(crop)]; }), hoverinfo:"all", hovertemplate:"<b>%{customdata[0]} County</b><br>State: %{customdata[1]}<br>Year: %{customdata[2]}<br>Crop: %{customdata[3]}<br>Selected measure: No data<extra></extra>" }
     ];
   }
   function renderMap() {
-    const crop=document.getElementById("map-crop").value, year=Number(document.getElementById("map-year").value);
-    Plotly.react(mapEl, mapTrace(crop, year), {title:`${cropLabel(crop)} Yields by County (${year})`, geo:{fitbounds:"locations",visible:false}, margin:{l:0,r:0,t:55,b:0}, paper_bgcolor:"rgba(0,0,0,0)", font:{family:"system-ui"}}, {responsive:true,displaylogo:false});
+    const crop=document.getElementById("map-crop").value, year=Number(document.getElementById("map-year").value), measure=document.getElementById("map-measure").value;
+    const title = measure === "YIELD" ? `${cropLabel(crop)} Yields by County (${year})` : `Annual Rainfall by County (${year})`;
+    Plotly.react(mapEl, mapTrace(crop, year, measure), {title, hovermode:"closest", geo:{fitbounds:"locations",visible:false}, margin:{l:0,r:0,t:55,b:0}, paper_bgcolor:"rgba(0,0,0,0)", font:{family:"system-ui"}}, {responsive:true,displaylogo:false});
   }
-  document.getElementById("map-crop").addEventListener("change",renderMap); document.getElementById("map-year").addEventListener("change",renderMap); renderMap();
+  document.getElementById("map-crop").addEventListener("change",renderMap); document.getElementById("map-year").addEventListener("change",renderMap); document.getElementById("map-measure").addEventListener("change",renderMap); renderMap();
 
   const stateEl=document.getElementById("line-state"), cropEl=document.getElementById("line-crop"), countyEl=document.getElementById("line-counties"), avgEl=document.getElementById("show-average"), lineEl=document.getElementById("yield-explorer");
   function updateCountyOptions() {
