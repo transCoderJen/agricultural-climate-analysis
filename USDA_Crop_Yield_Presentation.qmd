@@ -1,0 +1,216 @@
+---
+title: "USDA Corn and Soybean Yield Analysis"
+subtitle: "County-Level Interactive Exploration\nIowa and Illinois | 2015–2025"
+format:
+  revealjs:
+    theme: [default, presentation.scss]
+    width: 1600
+    height: 900
+    slide-number: true
+    controls: true
+    navigation-mode: linear
+    embed-resources: true
+    code-fold: false
+    toc: false
+jupyter: python3
+execute:
+  echo: false
+  warning: false
+  error: false
+  cache: false
+---
+
+## Interactive County Yield Map
+
+Use the **crop** and **year** controls to inspect county-level yields. Counties with no reported observation for the selected combination are shown in gray; gray is not a zero yield.
+
+```{python}
+#| output: asis
+from pathlib import Path
+import json
+import math
+import html
+
+import pandas as pd
+from IPython.display import HTML, display
+import plotly
+
+ROOT = Path.cwd()
+csv_path = ROOT / "data" / "processed" / "USDA_Crop_Yields_Cleaned.csv"
+geo_path = ROOT / "data" / "geographic" / "counties_5digit.geojson"
+
+if not csv_path.exists():
+    raise FileNotFoundError(f"Required cleaned USDA data was not found: {csv_path}")
+if not geo_path.exists():
+    raise FileNotFoundError(f"Required county boundary GeoJSON was not found: {geo_path}")
+
+raw = pd.read_csv(csv_path)
+states = ["IOWA", "ILLINOIS"]
+crops = ["CORN", "SOYBEANS"]
+years = list(range(2015, 2026))
+
+required = {"STATE_NAME", "STATE_ANSI", "COUNTY_ANSI", "COUNTY_NAME", "YEAR", "COMMODITY_DESC", "YIELD"}
+missing = required.difference(raw.columns)
+if missing:
+    raise ValueError(f"Cleaned USDA data is missing required columns: {sorted(missing)}")
+
+data = raw.copy()
+data["STATE_NAME"] = data["STATE_NAME"].astype(str).str.upper().str.strip()
+data["COMMODITY_DESC"] = data["COMMODITY_DESC"].astype(str).str.upper().str.strip()
+data["YEAR"] = pd.to_numeric(data["YEAR"], errors="coerce")
+data["YIELD"] = pd.to_numeric(data["YIELD"], errors="coerce")
+data["STATE_ANSI"] = data["STATE_ANSI"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(2)
+data["COUNTY_ANSI"] = data["COUNTY_ANSI"].astype(str).str.replace(r"\.0$", "", regex=True).str.zfill(3)
+data = data[
+    data["STATE_NAME"].isin(states)
+    & data["COMMODITY_DESC"].isin(crops)
+    & data["YEAR"].isin(years)
+    & data["YIELD"].notna()
+    & ~data["COUNTY_NAME"].astype(str).str.contains("OTHER|COMBINED", case=False, na=False)
+].copy()
+data["FIPS"] = data["STATE_ANSI"] + data["COUNTY_ANSI"]
+if data.empty:
+    raise ValueError("No Iowa/Illinois corn/soybean yield observations are available for 2015–2025.")
+if data.duplicated(["STATE_NAME", "COUNTY_ANSI", "COMMODITY_DESC", "YEAR"]).any():
+    raise ValueError("Duplicate county-year-crop records detected in the cleaned USDA data.")
+
+geo = json.loads(geo_path.read_text(encoding="utf-8"))
+geo["features"] = [
+    feature for feature in geo.get("features", [])
+    if str(feature.get("id", feature.get("properties", {}).get("GEOID", ""))).zfill(5)[:2] in {"17", "19"}
+]
+for feature in geo["features"]:
+    props = feature.setdefault("properties", {})
+    props["GEOID"] = str(feature.get("id", props.get("GEOID", ""))).zfill(5)
+    props["NAME"] = props.get("NAME", "County")
+
+records = data[["STATE_NAME", "COUNTY_NAME", "COUNTY_ANSI", "FIPS", "YEAR", "COMMODITY_DESC", "YIELD"]].copy()
+records["YIELD"] = records["YIELD"].round(3)
+payload = {
+    "states": states,
+    "crops": crops,
+    "years": years,
+    "records": records.to_dict(orient="records"),
+    "geojson": geo,
+    "ranges": {
+        crop: [float(data.loc[data["COMMODITY_DESC"] == crop, "YIELD"].min()), float(data.loc[data["COMMODITY_DESC"] == crop, "YIELD"].max())]
+        for crop in crops
+    },
+}
+
+payload_json = json.dumps(payload, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
+plotly_js = plotly.offline.get_plotlyjs()
+
+page = r'''<style>
+.yield-shell { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #18324b; }
+.yield-controls { display:flex; flex-wrap:wrap; gap: .8rem 1.2rem; align-items:center; margin: .2rem 0 .5rem; font-size: .82rem; }
+.yield-controls label { font-weight: 650; }
+.yield-controls select, .yield-controls button { border: 1px solid #b7c7d6; border-radius: .35rem; padding: .35rem .55rem; background: white; color:#18324b; }
+.yield-controls select[multiple] { min-width: 260px; height: 105px; }
+.yield-controls button { cursor:pointer; background:#edf4f8; }
+.yield-chart { width:100%; height: 650px; }
+.explorer-chart { height: 610px; }
+.yield-note { font-size:.72rem; color:#526879; margin:.15rem 0; }
+.error-box { color:#8a1c1c; background:#fff1f1; border:1px solid #e1a4a4; padding:1rem; border-radius:.4rem; }
+@media (max-width: 900px) { .yield-chart { height: 560px; } .explorer-chart { height: 520px; } }
+</style>
+<div class="yield-shell" id="yield-presentation"></div>
+<script>window.__USDA_YIELD_PAYLOAD__ = ''' + payload_json + r''';</script>
+<script>
+/* The Plotly library is embedded below by the Quarto Python cell. */
+</script>
+<script>''' + plotly_js + r'''</script>
+<script>
+(function () {
+  const P = window.__USDA_YIELD_PAYLOAD__;
+  const root = document.getElementById("yield-presentation");
+  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  const rows = P.records;
+  const byKey = (state, crop, year) => rows.filter(r => r.STATE_NAME === state && r.COMMODITY_DESC === crop && Number(r.YEAR) === Number(year));
+  const countyFeatures = P.geojson.features;
+  const geoids = countyFeatures.map(f => String(f.properties.GEOID));
+  const cropLabel = c => c === "CORN" ? "Corn" : "Soybeans";
+
+  root.innerHTML = `
+    <section>
+      <div class="yield-controls">
+        <label>Crop <select id="map-crop">${P.crops.map(c => `<option value="${c}">${cropLabel(c)}</option>`).join("")}</select></label>
+        <label>Year <select id="map-year">${P.years.map(y => `<option>${y}</option>`).join("")}</select></label>
+      </div>
+      <div class="yield-note">Color scales are fixed within each crop across years. Gray counties have no reported yield.</div>
+      <div id="yield-map" class="yield-chart"></div>
+    </section>
+    <section>
+      <div class="yield-controls">
+        <label>State <select id="line-state">${P.states.map(s => `<option value="${s}">${s[0] + s.slice(1).toLowerCase()}</option>`).join("")}</select></label>
+        <label>Crop <select id="line-crop">${P.crops.map(c => `<option value="${c}">${cropLabel(c)}</option>`).join("")}</select></label>
+        <label>Counties<br><select id="line-counties" multiple></select></label>
+        <button id="select-all" type="button">Select all</button><button id="clear-all" type="button">Clear</button>
+        <label><input id="show-average" type="checkbox" checked> State average</label>
+      </div>
+      <div class="yield-note">Use Ctrl/Cmd-click to select multiple counties. Missing years remain gaps.</div>
+      <div id="yield-explorer" class="yield-chart explorer-chart"></div>
+    </section>`;
+
+  const mapEl = document.getElementById("yield-map");
+  function mapTrace(crop, year) {
+    const vals = Object.fromEntries(byKey("IOWA", crop, year).concat(byKey("ILLINOIS", crop, year)).map(r => [r.FIPS, r]));
+    const observed = geoids.filter(id => vals[id]);
+    const missing = geoids.filter(id => !vals[id]);
+    const observedRows = observed.map(id => vals[id]);
+    return [
+      { type:"choropleth", geojson:P.geojson, locations:observed, z:observedRows.map(r => r.YIELD), featureidkey:"properties.GEOID", zmin:P.ranges[crop][0], zmax:P.ranges[crop][1], colorscale:"YlGn", marker:{line:{color:"white",width:.45}}, customdata:observedRows.map(r => [r.STATE_NAME, r.COUNTY_NAME, r.YEAR, cropLabel(r.COMMODITY_DESC), r.YIELD]), hovertemplate:"<b>%{customdata[1]} County</b><br>State: %{customdata[0]}<br>Year: %{customdata[2]}<br>Crop: %{customdata[3]}<br>Yield: %{customdata[4]:.1f} BU/ACRE<extra></extra>", colorbar:{title:"BU/ACRE"}, showscale:true },
+      { type:"choropleth", geojson:P.geojson, locations:missing, z:missing.map(() => 0), featureidkey:"properties.GEOID", colorscale:[[0,"#d9dee3"],[1,"#d9dee3"]], showscale:false, marker:{line:{color:"white",width:.45}}, customdata:missing.map(id => { const f=countyFeatures.find(x=>String(x.properties.GEOID)===id); return [f.properties.NAME, id.slice(0,2)==="19"?"IOWA":"ILLINOIS", year, cropLabel(crop)]; }), hovertemplate:"<b>%{customdata[0]} County</b><br>State: %{customdata[1]}<br>Year: %{customdata[2]}<br>Crop: %{customdata[3]}<br>Yield: No data<extra></extra>" }
+    ];
+  }
+  function renderMap() {
+    const crop=document.getElementById("map-crop").value, year=Number(document.getElementById("map-year").value);
+    Plotly.react(mapEl, mapTrace(crop, year), {title:`${cropLabel(crop)} Yields by County (${year})`, geo:{fitbounds:"locations",visible:false}, margin:{l:0,r:0,t:55,b:0}, paper_bgcolor:"rgba(0,0,0,0)", font:{family:"system-ui"}}, {responsive:true,displaylogo:false});
+  }
+  document.getElementById("map-crop").addEventListener("change",renderMap); document.getElementById("map-year").addEventListener("change",renderMap); renderMap();
+
+  const stateEl=document.getElementById("line-state"), cropEl=document.getElementById("line-crop"), countyEl=document.getElementById("line-counties"), avgEl=document.getElementById("show-average"), lineEl=document.getElementById("yield-explorer");
+  function updateCountyOptions() {
+    const subset=rows.filter(r=>r.STATE_NAME===stateEl.value && r.COMMODITY_DESC===cropEl.value);
+    const counties=[...new Map(subset.map(r=>[r.COUNTY_ANSI,r.COUNTY_NAME])).entries()].sort((a,b)=>a[1].localeCompare(b[1]));
+    countyEl.innerHTML=counties.map(([id,name])=>`<option value="${id}">${esc(name)}</option>`).join("");
+    counties.slice(0,5).forEach(([id])=>countyEl.querySelector(`option[value="${id}"]`).selected=true);
+    renderLines();
+  }
+  function renderLines() {
+    const state=stateEl.value,crop=cropEl.value, selected=[...countyEl.selectedOptions].map(o=>o.value), subset=rows.filter(r=>r.STATE_NAME===state&&r.COMMODITY_DESC===crop);
+    const traces=selected.map(id=>{ const cr=subset.filter(r=>r.COUNTY_ANSI===id).sort((a,b)=>a.YEAR-b.YEAR); return {type:"scatter",mode:"lines+markers",name:cr[0]?.COUNTY_NAME||id,x:cr.map(r=>r.YEAR),y:cr.map(r=>r.YIELD),connectgaps:false,hovertemplate:`<b>${esc(cr[0]?.COUNTY_NAME||id)} County</b><br>Year: %{x}<br>Yield: %{y:.1f} BU/ACRE<extra></extra>`}; });
+    if(avgEl.checked){ const avg=P.years.map(year=>{const v=subset.filter(r=>Number(r.YEAR)===year).map(r=>r.YIELD); return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;}); traces.push({type:"scatter",mode:"lines+markers",name:"Average County Yield",x:P.years,y:avg,connectgaps:false,line:{color:"#17202a",width:3,dash:"dash"},hovertemplate:"<b>Average County Yield</b><br>Year: %{x}<br>Yield: %{y:.1f} BU/ACRE<extra></extra>"});}
+    Plotly.react(lineEl,traces,{title:`${state[0]+state.slice(1).toLowerCase()} ${cropLabel(crop)} Yields by County`,xaxis:{title:"Year",tickmode:"linear",dtick:1},yaxis:{title:"Yield (Bushels per Acre)"},hovermode:"closest",template:"plotly_white",margin:{l:65,r:20,t:55,b:55},legend:{orientation:"h",y:-.18}}, {responsive:true,displaylogo:false});
+  }
+  stateEl.addEventListener("change",updateCountyOptions); cropEl.addEventListener("change",updateCountyOptions); countyEl.addEventListener("change",renderLines); avgEl.addEventListener("change",renderLines);
+  document.getElementById("select-all").addEventListener("click",()=>{[...countyEl.options].forEach(o=>o.selected=true);renderLines();}); document.getElementById("clear-all").addEventListener("click",()=>{[...countyEl.options].forEach(o=>o.selected=false);renderLines();});
+  updateCountyOptions();
+  /* Keep the map and explorer on separate Reveal slides while retaining one
+     shared browser-side data payload and Plotly runtime. */
+  const slide = root.closest("section");
+  const panels = root.querySelectorAll(":scope > section");
+  if (slide && panels.length > 1) {
+    const explorerSlide = document.createElement("section");
+    const heading = document.createElement("h2");
+    heading.textContent = "Interactive County Yield Explorer";
+    explorerSlide.appendChild(heading);
+    explorerSlide.appendChild(panels[1]);
+    slide.parentElement.insertBefore(explorerSlide, slide.nextSibling);
+    if (window.Reveal) window.setTimeout(() => window.Reveal.sync(), 0);
+  }
+})();
+</script>'''
+
+print(page)
+```
+
+## Data Notes and Limitations
+
+- **Source:** USDA NASS Quick Stats, using the notebook’s cached/cleaned county-yield workflow.
+- County-level yields are aggregated estimates, not individual farm yields.
+- Missing county observations can affect comparisons across years.
+- The optional state-average line is an unweighted average of reporting counties, not an official statewide yield.
+- This presentation supports only corn grain and soybeans, measured in bushels per acre, for Iowa and Illinois from 2015–2025.
+
+The exported presentation contains the filtered observations and county boundaries needed by the two charts; it makes no USDA API requests and does not expose `.env` contents or the API key.
