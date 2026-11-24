@@ -1,7 +1,9 @@
 """County coverage and acreage-weighted USDA yield analysis."""
 from pathlib import Path
 import json
+from io import BytesIO
 
+import geopandas as gpd
 import pandas as pd
 import requests
 
@@ -12,8 +14,45 @@ KEYS = ["STATE_ANSI", "COUNTY_ANSI", "COMMODITY_DESC", "YEAR"]
 GROUP = ["STATE_NAME", "COMMODITY_DESC", "YEAR"]
 
 
+def load_county_boundaries(path=Path("data/geographic/counties_5digit.geojson")):
+    """Reuse local Census county boundaries, or download and cache them once."""
+    path = Path(path)
+    if not path.exists():
+        url = "https://www2.census.gov/geo/tiger/GENZ2025/shp/cb_2025_us_county_500k.zip"
+        try:
+            response = requests.get(url, timeout=120)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise RuntimeError(f"County boundaries are not cached at {path}; download failed ({type(exc).__name__}).") from None
+        boundaries = gpd.read_file(BytesIO(response.content))
+        required = {"STATEFP", "COUNTYFP", "GEOID", "NAME", "geometry"}
+        if not required.issubset(boundaries.columns) or boundaries.empty or boundaries.crs is None:
+            raise ValueError("Downloaded Census boundaries are missing required fields or geometry.")
+        boundaries = boundaries.rename(columns={"STATEFP": "STATE", "COUNTYFP": "COUNTY"})
+        boundaries = boundaries.to_crs("EPSG:4326")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.stem + ".tmp.geojson")
+        try:
+            boundaries.to_file(temporary, driver="GeoJSON")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        print(f"Downloaded and cached Census county boundaries: {path}")
+    else:
+        print(f"Loading cached county boundaries: {path}")
+    boundaries = gpd.read_file(path)
+    required = {"STATE", "COUNTY", "NAME", "geometry"}
+    if not required.issubset(boundaries.columns) or boundaries.empty or boundaries.crs is None:
+        raise ValueError(f"Cached county boundaries at {path} are missing required fields or geometry.")
+    boundaries["STATEFP"] = boundaries["STATE"].astype("string").str.zfill(2)
+    boundaries["GEOID"] = boundaries["STATEFP"] + boundaries["COUNTY"].astype("string").str.zfill(3)
+    return boundaries
+
+
 def geographic_counties(config):
     """Read geographic county identifiers from the project's Census boundaries."""
+    if not Path("data/geographic/counties_5digit.geojson").exists():
+        load_county_boundaries()
     data = json.loads(Path("data/geographic/counties_5digit.geojson").read_text(encoding="utf-8"))
     names = {code: name for name, code in STATE_CODES.items() if name in config["states"]}
     rows = [{"STATE_NAME": names[p["STATE"]], "STATE_ANSI": p["STATE"],
@@ -32,7 +71,7 @@ def geographic_counties(config):
     return geo
 
 
-def load_usda_measure(config, api_key, statistic, level, unit, cache_path_fn, force_refresh=False):
+def load_usda_measure(config, api_key, statistic, level, unit, cache_path_fn, force_refresh=False, api_key_provider=None):
     """Retrieve one comparable measure, using the notebook's configuration-keyed cache."""
     query_config = {**config, "statistic": statistic, "aggregation_level": level,
                     "yield_unit": unit, "phase1_query_version": 2}
@@ -40,6 +79,10 @@ def load_usda_measure(config, api_key, statistic, level, unit, cache_path_fn, fo
     if path.exists() and not force_refresh:
         print(f"Loading cached {level} {statistic}: {path}")
         return pd.read_pickle(path)
+    if not api_key:
+        if api_key_provider is None:
+            raise ValueError("A USDA API key is required when the requested data is not cached.")
+        api_key = api_key_provider()
     frames = []
     for state in config["states"]:
         for crop in config["crops"]:

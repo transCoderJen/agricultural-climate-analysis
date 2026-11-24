@@ -110,6 +110,8 @@ crop_df = load_usda_crop_yields(
 
 A forced refresh makes new USDA requests, so use it only when needed. Cache behavior depends on the loader implementation and its version.
 
+County map boundaries are read from `data/geographic/counties_5digit.geojson`. If the file is missing, the notebook downloads Census county boundaries and saves a local copy for subsequent runs. Keep that file and the USDA cache files for the selected configuration available to work offline. The notebook also uses any existing local files needed by its interactive charts. Dependencies must already be installed; package installation is a separate setup step. A USDA API key is requested only when a USDA cache entry is missing and data must be downloaded.
+
 ## 6. Understanding the outputs
 
 The notebook may include:
